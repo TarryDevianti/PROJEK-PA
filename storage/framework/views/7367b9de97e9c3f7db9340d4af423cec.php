@@ -1,0 +1,1 @@
+<?php /**PATH D:\PROJEK TA TARRY\ta-ukm\resources\views/admin_pengurus/partials/footer.blade.php ENDPATH**/ ?>

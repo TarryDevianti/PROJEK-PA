@@ -1,0 +1,25 @@
+<?php
+
+namespace App\Models;
+
+use Illuminate\Database\Eloquent\Factories\HasFactory;
+use Illuminate\Database\Eloquent\Model;
+
+class Galeri extends Model
+{
+    use HasFactory;
+
+    protected $table = 'galeris';
+
+    protected $fillable = [
+        'ukm_id',
+        'judul',
+        'deskripsi',
+        'gambar'
+    ];
+
+    public function ukm()
+    {
+        return $this->belongsTo(Ukm::class, 'ukm_id');
+    }
+}
