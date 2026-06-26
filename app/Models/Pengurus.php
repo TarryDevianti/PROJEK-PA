@@ -32,4 +32,11 @@ class Pengurus extends Model
         // Sesuaikan 'slug' dengan nama kolom primary key di tabel UKM Anda jika berbeda
         return $this->belongsTo(Ukm::class, 'ukm_slug', 'slug');
     }
+
+    public function user()
+{
+    return $this->belongsTo(User::class, 'user_id');
+}
+
+    
 }

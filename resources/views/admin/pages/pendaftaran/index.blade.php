@@ -40,6 +40,7 @@
                                         <th style="text-align: center;">Nama Lengkap</th>
                                         <th style="width: 150px; text-align: center;">NPM</th>
                                         <th style="text-align: center;">Program Studi</th>
+                                        <th style="text-align: center;">UKM</th>
                                         <th style="width: 150px; text-align: center;">Aksi</th>
                                     </tr>
                                 </thead>
@@ -50,6 +51,7 @@
                                     <td>{{ $item->nama_lengkap }}</td>
                                     <td class="text-center">{{ $item->npm }}</td>
                                     <td>{{ $item->prodi }}</td>
+                                    <td>{{ $item->nama_ukm }}</td>
                                     <td class="text-center">
                                         <a href="{{ route('pendaftaran.show', $item->id) }}" class="btn btn-info btn-sm">Lihat</a>
 

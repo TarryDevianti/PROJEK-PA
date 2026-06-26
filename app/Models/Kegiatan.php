@@ -18,4 +18,9 @@ class Kegiatan extends Model
         'status',
         'views',
     ];
+
+    public function ukm()
+    {
+        return $this->belongsTo(Ukm::class, 'ukm_id');
+    }
 }

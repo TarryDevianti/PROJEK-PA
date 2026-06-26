@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers\Admin;
 
+use App\Models\Ukm;
 use App\Http\Controllers\Controller;
 use App\Models\Pendaftaran;
 use App\Models\User;
@@ -13,8 +14,19 @@ use Illuminate\Support\Facades\Log;
 
 class PendaftaranController extends Controller
 {
-   
-public function index()
+    /**
+     * Menampilkan halaman pilih UKM untuk mahasiswa
+     */
+    public function pilihUkm()
+    {
+        $ukms = Ukm::where('status', 'aktif')->get();
+        return view('mahasiswa.pilih_ukm', compact('ukms'));
+    }
+
+    /**
+     * Menampilkan daftar pendaftaran untuk admin
+     */
+   public function index()
 {
     $admin = Auth::user();
 
@@ -25,21 +37,22 @@ public function index()
     // SUPER ADMIN
     if ($admin->role === 'super_admin') {
 
-        $pendaftaran = Pendaftaran::latest()->get();
+        $pendaftaran = Pendaftaran::with('user')
+            ->latest()
+            ->get();
 
         return view('admin.pages.pendaftaran.index', compact('pendaftaran'));
     }
 
-    // ADMIN PENGURUS
-    $ukmNama = $admin->ukm->nama_ukm ?? null;
+    // ADMIN UKM
+    $ukm = $admin->ukm;
 
-    if (!$ukmNama) {
-
+    if (!$ukm) {
         $pendaftaran = collect();
-
     } else {
 
-        $pendaftaran = Pendaftaran::where('ukm_tujuan', $ukmNama)
+        $pendaftaran = Pendaftaran::with('user')
+            ->where('ukm_tujuan', $ukm->slug)
             ->latest()
             ->get();
     }
@@ -47,13 +60,18 @@ public function index()
     return view('admin_pengurus.pendaftaran.index', compact('pendaftaran'));
 }
 
-
+    /**
+     * Menampilkan detail pendaftaran
+     */
     public function show($id)
     {
-        $pendaftaran = Pendaftaran::findOrFail($id);
+        $pendaftaran = Pendaftaran::with(['user', 'ukm'])->findOrFail($id);
         return view('admin.pages.pendaftaran.show', compact('pendaftaran'));
     }
 
+    /**
+     * Update status pendaftaran
+     */
     public function updateStatus(Request $request, $id)
     {
         $request->validate([
@@ -68,9 +86,20 @@ public function index()
             'catatan_admin' => $request->catatan_admin,
         ]);
 
+        // Jika diterima, update status user
+        if ($request->status === 'diterima') {
+            $user = User::find($pendaftaran->user_id);
+            if ($user) {
+                $user->update(['status_diterima' => 'diterima']);
+            }
+        }
+
         return back()->with('success', 'Status berhasil diperbarui');
     }
 
+    /**
+     * Hapus data pendaftaran
+     */
     public function destroy($id)
     {
         if (Auth::user()->role === 'super_admin') {
@@ -92,37 +121,115 @@ public function index()
         }
     }
 
+    /**
+     * Dashboard user (mahasiswa)
+     */
     public function dashboard()
     {
         $user = Auth::user();
-
         $pendaftaran = Pendaftaran::where('user_id', $user->id)->first();
-
         return view('user.dashboard', compact('pendaftaran'));
     }
 
+    /**
+     * Menampilkan form pendaftaran UKM
+     */
     public function showForm($ukm_slug)
-    {
-        if (!Auth::check()) {
-            return redirect()->route('login');
-        }
-
-        $map = [
-            'seuramoe' => 'UKM SERAMOE',
-            'ulul-albab' => 'UKM LDF ULUL ALBAB',
-            'barracuda' => 'UKM BARRACUDA'
-        ];
-
-        if (!isset($map[$ukm_slug])) {
-            return redirect()->route('beranda');
-        }
-
-        return view('user.pendaftaran.isi_formulir', [
-            'user' => Auth::user(),
-            'ukmNama' => $map[$ukm_slug]
-        ]);
+{
+    if (!Auth::check()) {
+        return redirect()->route('login')->with('error', 'Silakan login terlebih dahulu');
     }
 
+    $ukm = Ukm::where('slug', $ukm_slug)->first();
+
+    if (!$ukm) {
+        return redirect()->route('pilih.ukm')->with('error', 'UKM tidak ditemukan, silakan pilih UKM lain.');
+    }
+
+    $user = Auth::user();
+    $sudahDaftar = Pendaftaran::where('user_id', $user->id)->exists();
+
+    if ($sudahDaftar) {
+        return redirect()->route('dashboard')->with('error', 'Anda sudah mendaftar UKM.');
+    }
+
+    $ukms = Ukm::where('status', 'aktif')->get();
+
+    return view('user.pendaftaran.isi_formulir', [
+        'user' => $user,
+        'ukm' => $ukm,
+        'ukmId' => $ukm->id,
+        'ukmNama' => $ukm->nama_ukm,
+        'ukms' => $ukms,
+    ]);
+}
+
+    public function storeForm(Request $request)
+{
+    $user = Auth::user();
+
+    // Cek apakah sudah pernah daftar
+    if (Pendaftaran::where('user_id', $user->id)->exists()) {
+        return back()->with('error', 'Anda sudah pernah mendaftar.');
+    }
+
+    // Validasi
+    $request->validate([
+        'ukm_id' => 'required|exists:ukms,id',
+        'divisi_tujuan' => 'required|string',
+        'alasan' => 'required|string',
+        'alamat' => 'required|string',
+        'foto' => 'required|image|mimes:jpeg,png,jpg|max:2048',
+    ]);
+
+    try {
+        DB::transaction(function () use ($request, $user) {
+            // Upload foto
+            $foto = $request->file('foto')->store('foto_pendaftaran', 'public');
+
+            // Ambil UKM untuk mendapatkan slug
+            $ukm = Ukm::find($request->ukm_id);
+
+            // Simpan data
+            Pendaftaran::create([
+                'user_id' => $user->id,
+                'nama_lengkap' => $user->name,
+                'npm' => $user->npm,
+                'prodi' => $user->program_studi ?? '-',
+                'email' => $user->email,
+                'no_telepon' => $user->telepon ?? '-',
+                'angkatan' => $user->angkatan,
+                'ukm_id' => $request->ukm_id,
+                'ukm_tujuan' => $ukm->slug, // <--- TAMBAHKAN INI
+                'divisi_tujuan' => $request->divisi_tujuan,
+                'alasan' => $request->alasan,
+                'alamat' => $request->alamat,
+                'foto' => $foto,
+                'status' => 'pending',
+            ]);
+        });
+
+        // Ambil data UKM
+        $ukm = Ukm::find($request->ukm_id);
+
+        // Link grup WhatsApp berdasarkan slug
+        $linkGrup = match ($ukm->slug) {
+            'seuramoe', 'seramoe', 'ukm-seramoe' => 'https://chat.whatsapp.com/LINK_SERAMOE',
+            'ulul-albab', 'ukm-ldf-ulul-albab' => 'https://chat.whatsapp.com/FCxzRHsuzs83bY60ouGQ2k',
+            'barracuda', 'ukm-barracuda' => 'https://chat.whatsapp.com/FCxzRHsuzs83bY60ouGQ2k',
+            default => route('beranda'),
+        };
+
+        return redirect()->away($linkGrup);
+
+    } catch (\Exception $e) {
+        Log::error('Error pendaftaran: ' . $e->getMessage());
+        return back()->with('error', 'Gagal mendaftar: ' . $e->getMessage());
+    }
+}
+    /**
+     * Terima anggota (admin pengurus)
+     */
     public function terimaAnggota($id)
     {
         if (Auth::user()->role === 'super_admin') {
@@ -135,102 +242,23 @@ public function index()
         $user->update(['status_diterima' => 'diterima']);
         $pendaftaran->update(['status' => 'diterima']);
 
-        return back()->with('success', 'Diterima');
+        return back()->with('success', 'Anggota berhasil diterima');
     }
 
+    /**
+     * Dashboard admin pengurus
+     */
     public function adminPengurus()
-{
-    $user = auth()->user();
+    {
+        $user = auth()->user();
+        $ukm = $user->ukm;
 
-    $ukm = $user->ukm;
+        if (!$ukm) {
+            abort(404, 'UKM tidak ditemukan');
+        }
 
-    if (!$ukm) {
-        abort(404, 'UKM tidak ditemukan');
+        $pendaftaran = Pendaftaran::where('ukm_id', $ukm->id)->latest()->get();
+
+        return view('admin.pages.pendaftaran.index', compact('pendaftaran'));
     }
-
-    $pendaftaran = Pendaftaran::where('ukm_tujuan', $ukm->nama_ukm)
-        ->latest()
-        ->get();
-
-    return view('admin.pages.pendaftaran.index', compact('pendaftaran'));
-}
-
-public function storeForm(Request $request)
-{
-    $user = Auth::user();
-
-    // cek apakah sudah pernah daftar
-    if (Pendaftaran::where('npm', $user->npm)->exists()) {
-
-        return back()->with('error', 'Sudah daftar.');
-    }
-
-    $request->validate([
-        'ukm_tujuan' => 'required',
-        'divisi_tujuan' => 'required',
-        'alasan' => 'required',
-        'alamat' => 'required',
-        'foto' => 'required|image|max:2048',
-    ]);
-
-    try {
-
-        DB::transaction(function () use ($request, $user) {
-
-            // upload foto
-            $foto = $request->file('foto')->store('foto', 'public');
-
-            // simpan data
-            Pendaftaran::create([
-
-                'user_id' => $user->id,
-                'nama_lengkap' => $user->name,
-
-                'npm' => $user->npm,
-
-                // INI YANG DIPERBAIKI
-                'prodi' => $user->program_studi ?? '-',
-
-                'email' => $user->email,
-
-                // INI JUGA DIPERBAIKI
-                'no_telepon' => $user->telepon ?? '-',
-
-                'angkatan' => $user->angkatan,
-
-                'ukm_tujuan' => $request->ukm_tujuan,
-                'divisi_tujuan' => $request->divisi_tujuan,
-                'alasan' => $request->alasan,
-                'alamat' => $request->alamat,
-
-                'foto' => $foto,
-
-                'status' => 'pending',
-            ]);
-        });
-
-        // LINK GRUP WHATSAPP
-        $linkGrup = match ($request->ukm_tujuan) {
-
-            'UKM SERAMOE' =>
-                'https://chat.whatsapp.com/LINK_SERAMOE',
-
-            'UKM LDF ULUL ALBAB' =>
-                'https://chat.whatsapp.com/FCxzRHsuzs83bY60ouGQ2k',
-
-            'UKM BARRACUDA' =>
-                'https://chat.whatsapp.com/FCxzRHsuzs83bY60ouGQ2k',
-
-            default => route('beranda'),
-        };
-
-        return redirect()->away($linkGrup);
-
-    } catch (\Exception $e) {
-
-        Log::error($e->getMessage());
-
-        return back()->with('error', 'Gagal daftar');
-    }
-}
 }

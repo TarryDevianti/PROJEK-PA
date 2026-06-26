@@ -4,52 +4,72 @@ namespace App\Http\Controllers\Admin;
 
 use App\Http\Controllers\Controller;
 use App\Models\User;
-use App\Models\Ukm; // Import model Ukm untuk mengambil daftar kelompok kerja
+use App\Models\Ukm;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Hash;
 
 class AccountController extends Controller
 {
     /**
      * Menampilkan halaman utama manajemen akun dengan filter tab UKM.
+     * Hanya Super Admin yang bisa mengakses.
      */
     public function index(Request $request)
     {
-        // Ambil parameter ukm dari URL tab, default ke 'Seuramoe' jika kosong
-        $activeUkm = $request->get('ukm', 'Seuramoe');
-        
-        // Mapping string nama tab UI langsung ke ID UKM di database
-        $ukmMapping = [
-            'Seuramoe'   => 1,
-            'Ulul Albab' => 2,
-            'Barracuda'  => 3
-        ];
+        // Pastikan hanya Super Admin yang bisa akses
+        if (Auth::user()->role !== 'super_admin') {
+            abort(403, 'Akses ditolak. Hanya Super Admin.');
+        }
 
-        // Dapatkan ID UKM target, jika tidak cocok default ke ID 1 (Seuramoe)
-        $targetUkmId = $ukmMapping[$activeUkm] ?? 1;
-
-        // Filter: Ambil data user yang memiliki ukm_id sesuai dengan tab aktif
-        $query = User::query()->where('ukm_id', $targetUkmId);
+        $activeUkm = $request->get('ukm', null);
+        $showAll = $request->has('all');
         
-        // Fitur pencarian berdasarkan Nama atau NPM
+        $ukms = Ukm::where('status', 'aktif')->orderBy('nama_ukm')->get();
+        
+        // Jika tidak ada filter dan tidak ada 'all', ambil UKM pertama
+        if (!$activeUkm && $ukms->isNotEmpty() && !$showAll) {
+            $activeUkm = $ukms->first()->nama_ukm;
+        }
+
+        $query = User::query();
+
+        // Filter berdasarkan UKM
+        if ($activeUkm && !$showAll) {
+            $ukm = Ukm::where('nama_ukm', $activeUkm)->first();
+            if ($ukm) {
+                $query->where('ukm_id', $ukm->id);
+            }
+        }
+        // Jika 'all', tidak ada filter UKM, tampilkan semua
+
+        // Jika ada search
         if ($request->filled('search')) {
-            $query->where(function($q) use ($request) {
-                $q->where('name', 'like', '%' . $request->search . '%')
-                  ->orWhere('npm', 'like', '%' . $request->search . '%');
+            $search = $request->search;
+            $query->where(function($q) use ($search) {
+                $q->where('name', 'like', '%' . $search . '%')
+                  ->orWhere('npm', 'like', '%' . $search . '%')
+                  ->orWhere('email', 'like', '%' . $search . '%');
             });
         }
 
-        $users = $query->latest()->get();
+        // Urutkan berdasarkan created_at
+        $users = $query->latest()->paginate(10);
         
-        return view('admin.pages.manajemen_akun.index', compact('users', 'activeUkm'));
+        return view('admin.pages.manajemen_akun.index', compact('users', 'activeUkm', 'ukms'));
     }
 
     /**
-     * Menampilkan form tambah akun (Dinamis mengambil semua data UKM).
+     * Menampilkan form tambah akun
      */
     public function create()
     {
-        $ukms = Ukm::all(); 
+        // Pastikan hanya Super Admin
+        if (Auth::user()->role !== 'super_admin') {
+            abort(403, 'Akses ditolak.');
+        }
+
+        $ukms = Ukm::where('status', 'aktif')->get();
         return view('admin.pages.manajemen_akun.create', compact('ukms'));
     }
 
@@ -58,6 +78,10 @@ class AccountController extends Controller
      */
     public function store(Request $request)
     {
+        if (Auth::user()->role !== 'super_admin') {
+            abort(403, 'Akses ditolak.');
+        }
+
         $request->validate([
             'name'     => 'required|string|max:255',
             'npm'      => 'required|numeric|unique:users,npm',
@@ -65,41 +89,56 @@ class AccountController extends Controller
             'ukm_id'   => 'required|exists:ukms,id',
         ]);
 
-        // Tentukan string role secara otomatis berdasarkan ukm_id yang dipilih
-        $role = 'admin_seramoe';
-        if ($request->ukm_id == 2) {
-            $role = 'admin_ulul_albab';
-        } elseif ($request->ukm_id == 3) {
-            $role = 'admin_barracuda';
+        // Tentukan role secara otomatis berdasarkan ukm_id yang dipilih
+        $ukm = Ukm::find($request->ukm_id);
+        $role = 'admin_' . strtolower(str_replace(' ', '_', $ukm->nama_ukm));
+
+        // Mapping khusus untuk UKM yang sudah ada
+        $roleMapping = [
+            'seuramoe' => 'admin_seramoe',
+            'ulul_albab' => 'admin_ulul_albab',
+            'ldf_ulul_albab' => 'admin_ulul_albab',
+            'barracuda' => 'admin_barracuda'
+        ];
+
+        $slugLower = strtolower($ukm->slug);
+        foreach ($roleMapping as $key => $value) {
+            if (strpos($slugLower, $key) !== false) {
+                $role = $value;
+                break;
+            }
         }
 
-        // Menyimpan data user baru (Baris password_plain dihapus total)
         $user = User::create([
             'name'           => $request->name,
             'npm'            => $request->npm,
             'email'          => $request->npm . '@mhs.usk.ac.id',
             'password'       => Hash::make($request->password), 
+            'password_plain' => $request->password,
             'role'           => $role, 
             'ukm_id'         => $request->ukm_id,
-            'is_active'      => true
+            'is_active'      => true,
+            'program_studi'  => $request->program_studi ?? '',
+            'angkatan'       => $request->angkatan ?? '',
+            'telepon'        => $request->telepon ?? '',
+            'status_diterima' => 'diterima'
         ]);
 
-        // Redirect kembali ke tab kelompok UKM yang bersangkutan agar langsung muncul
-        $ukmParam = 'Seuramoe';
-        if ($user->ukm_id == 2) $ukmParam = 'Ulul Albab';
-        if ($user->ukm_id == 3) $ukmParam = 'Barracuda';
-
-        return redirect()->route('manajemen-akun.index', ['ukm' => $ukmParam])
+        return redirect()->route('manajemen-akun.index', ['ukm' => $ukm->nama_ukm])
                          ->with('success', 'Akun admin berhasil ditambahkan!');
     }
 
     /**
-     * Menampilkan form edit akun beserta data UKM-nya.
+     * Menampilkan form edit akun
      */
     public function edit($id)
     {
+        if (Auth::user()->role !== 'super_admin') {
+            abort(403, 'Akses ditolak.');
+        }
+
         $user = User::findOrFail($id); 
-        $ukms = Ukm::all(); 
+        $ukms = Ukm::where('status', 'aktif')->get(); 
         return view('admin.pages.manajemen_akun.edit', compact('user', 'ukms'));
     }
 
@@ -108,6 +147,10 @@ class AccountController extends Controller
      */
     public function update(Request $request, $id)
     {
+        if (Auth::user()->role !== 'super_admin') {
+            abort(403, 'Akses ditolak.');
+        }
+
         $user = User::findOrFail($id);
 
         $request->validate([
@@ -116,12 +159,22 @@ class AccountController extends Controller
             'ukm_id' => 'required|exists:ukms,id',
         ]);
 
-        // Ubah role secara otomatis sesuai kelompok UKM baru yang dipilih
-        $role = 'admin_seramoe';
-        if ($request->ukm_id == 2) {
-            $role = 'admin_ulul_albab';
-        } elseif ($request->ukm_id == 3) {
-            $role = 'admin_barracuda';
+        $ukm = Ukm::find($request->ukm_id);
+        $role = 'admin_' . strtolower(str_replace(' ', '_', $ukm->nama_ukm));
+
+        $roleMapping = [
+            'seuramoe' => 'admin_seramoe',
+            'ulul_albab' => 'admin_ulul_albab',
+            'ldf_ulul_albab' => 'admin_ulul_albab',
+            'barracuda' => 'admin_barracuda'
+        ];
+
+        $slugLower = strtolower($ukm->slug);
+        foreach ($roleMapping as $key => $value) {
+            if (strpos($slugLower, $key) !== false) {
+                $role = $value;
+                break;
+            }
         }
 
         $data = [
@@ -129,23 +182,17 @@ class AccountController extends Controller
             'npm'    => $request->npm,
             'role'   => $role,
             'ukm_id' => $request->ukm_id,
-            'email'  => $request->npm . '@mhs.usk.ac.id', 
+            'email'  => $request->npm . '@mhs.usk.ac.id',
         ];
 
-        // Jika form input password baru diisi saat edit data
         if ($request->filled('password')) {
             $data['password'] = Hash::make($request->password);
-            // Baris password_plain dihapus untuk menghindari SQL QueryException
+            $data['password_plain'] = $request->password;
         }
 
         $user->update($data);
 
-        // Redirect dinamis ke tab asal kelompok ukm_id yang baru diubah
-        $ukmParam = 'Seuramoe';
-        if ($user->ukm_id == 2) $ukmParam = 'Ulul Albab';
-        if ($user->ukm_id == 3) $ukmParam = 'Barracuda';
-
-        return redirect()->route('manajemen-akun.index', ['ukm' => $ukmParam])
+        return redirect()->route('manajemen-akun.index', ['ukm' => $ukm->nama_ukm])
                          ->with('success', 'Data akun ' . $user->name . ' berhasil diperbarui!');
     }
 
@@ -154,6 +201,10 @@ class AccountController extends Controller
      */
     public function blokir($id)
     {
+        if (Auth::user()->role !== 'super_admin') {
+            abort(403, 'Akses ditolak.');
+        }
+
         $akun = User::findOrFail($id);
         
         if ($akun->is_active) {
@@ -166,31 +217,32 @@ class AccountController extends Controller
         
         $akun->save();
 
-        // Redirect dinamis kembali ke tab asal kelompoknya
-        $ukmParam = 'Seuramoe';
-        if ($akun->ukm_id == 2) $ukmParam = 'Ulul Albab';
-        if ($akun->ukm_id == 3) $ukmParam = 'Barracuda';
+        $ukm = Ukm::find($akun->ukm_id);
+        $ukmParam = $ukm ? $ukm->nama_ukm : 'Seuramoe';
 
         return redirect()->route('manajemen-akun.index', ['ukm' => $ukmParam])->with('success', $pesan);
     }
 
     /**
-     * Mereset password akun kembali ke default (password123).
+     * Mereset password akun
      */
     public function resetPassword($id)
     {
+        if (Auth::user()->role !== 'super_admin') {
+            abort(403, 'Akses ditolak.');
+        }
+
         $akun = User::findOrFail($id);
         
-        // Simpan versi enkripsi Bcrypt saja (Baris password_plain dihapus)
-        $akun->password = Hash::make('password123');
+        $newPassword = 'password123';
+        $akun->password = Hash::make($newPassword);
+        $akun->password_plain = $newPassword; // <-- update plain
         $akun->save();
 
-        // Redirect dinamis kembali ke tab asal kelompoknya
-        $ukmParam = 'Seuramoe';
-        if ($akun->ukm_id == 2) $ukmParam = 'Ulul Albab';
-        if ($akun->ukm_id == 3) $ukmParam = 'Barracuda';
+        $ukm = Ukm::find($akun->ukm_id);
+        $ukmParam = $ukm ? $ukm->nama_ukm : 'Seuramoe';
 
         return redirect()->route('manajemen-akun.index', ['ukm' => $ukmParam])
-                         ->with('success', 'Password berhasil di-reset menjadi password123!');
+                         ->with('success', 'Password berhasil di-reset menjadi ' . $newPassword . '!');
     }
 }

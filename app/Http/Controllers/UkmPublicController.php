@@ -65,4 +65,47 @@ class UkmPublicController extends Controller
             'kontak'
         ));
     }
+
+    public function kegiatanSaya()
+    {
+        $user = auth()->user(); // atau Auth::user()
+        if (!$user || !$user->ukm_id) {
+            return redirect()->route('beranda')->with('error', 'Anda belum terdaftar di UKM manapun.');
+        }
+
+        $kegiatans = Kegiatan::where('ukm_id', $user->ukm_id)
+                    ->with('ukm')
+                    ->latest()
+                    ->get();
+
+        return view('user.kegiatan.index', compact('kegiatans'));
+    }
+
+    public function galeriSaya()
+    {
+        $user = auth()->user();
+        if (!$user || !$user->ukm_id) {
+            return redirect()->route('beranda')->with('error', 'Anda belum terdaftar di UKM manapun.');
+        }
+
+        $galeris = Galeri::where('ukm_id', $user->ukm_id)
+                    ->with('ukm')
+                    ->latest()
+                    ->get();
+
+        return view('user.galeri.index', compact('galeris'));
+    }
+
+    public function ukmSaya()
+    {
+        $user = auth()->user();
+        if (!$user || !$user->ukm_id) {
+            return redirect()->route('beranda')->with('error', 'Anda belum terdaftar di UKM manapun.');
+        }
+
+        $ukm = Ukm::findOrFail($user->ukm_id);
+
+        // Redirect ke halaman detail publik dengan slug UKM tersebut
+        return redirect()->route('ukm.detail-publik', ['slug' => $ukm->slug]);
+    }
 }

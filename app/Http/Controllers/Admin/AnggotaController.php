@@ -3,145 +3,188 @@
 namespace App\Http\Controllers\Admin;
 
 use App\Http\Controllers\Controller;
-use App\Models\User;
+use App\Models\Pendaftaran;
 use App\Models\Ukm;
+use App\Models\User;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Validation\Rule;
 
 class AnggotaController extends Controller
 {
-    /**
-     * Menampilkan daftar anggota
-     */
-    public function index($ukm_id = null)
-    {
-         $user = Auth::user();
+    // ==========================================
+    // HELPER METHODS (PENGECEKAN AKSES)
+    // ==========================================
 
-        // ==========================================
-        // SUPER ADMIN
-        // ==========================================
+    protected function getAnggotaOrFail($id)
+    {
+        $user = Auth::user();
+
         if ($user->role === 'super_admin') {
-
-            // Semua anggota jika tidak memilih UKM
-            if (!$ukm_id) {
-
-                $anggotas = User::with('ukm')
-                    ->where('role', 'anggota')
-                    ->orderBy('name')
-                    ->get();
-
-                return view('admin.pages.anggota.index', [
-                    'ukm' => null,
-                    'anggotas' => $anggotas
-                ]);
-            }
-
-            // Anggota berdasarkan UKM
-            $ukm = Ukm::findOrFail($ukm_id);
-
-            $anggotas = User::with('ukm')
-                ->where('ukm_id', $ukm_id)
-                ->where('role', 'anggota')
-                ->orderBy('name')
-                ->get();
-
-            return view('admin.pages.anggota.index', compact(
-                'ukm',
-                'anggotas'
-            ));
+            return User::with('ukm')->findOrFail($id);
         }
 
-        // ==========================================
-        // ADMIN PENGURUS UKM
-        // ==========================================
         $ukm = $user->ukm;
+        abort_if(!$ukm, 403, 'UKM tidak ditemukan.');
 
-        if (!$ukm) {
-            abort(403, 'UKM tidak ditemukan.');
+        return User::where('ukm_id', $ukm->id)
+                   ->where('role', 'anggota')
+                   ->findOrFail($id);
+    }
+
+    protected function getCurrentUkmForAdmin()
+    {
+        $user = Auth::user();
+        if ($user->role === 'super_admin') {
+            return null;
         }
 
-        $anggotas = User::with('ukm')
-            ->where('ukm_id', $ukm->id)
-            ->where('role', 'anggota')
-            ->orderBy('name')
-            ->get();
-
-        return view('admin.pages.anggota.index', compact(
-            'ukm',
-            'anggotas'
-        ));
+        $ukm = $user->ukm;
+        abort_if(!$ukm, 403, 'UKM tidak ditemukan.');
+        return $ukm;
     }
 
-    /**
-     * Menampilkan profil anggota
-     */
-    public function show(int $id)
-    {
-        $anggota = User::with('ukm')
-            ->findOrFail($id);
+    // ==========================================
+    // UNTUK USER BIASA (MAHASISWA)
+    // ==========================================
 
-        return view(
-            'admin.pages.anggota.profil',
-            compact('anggota')
-        );
+public function daftar()
+{
+    $user = Auth::user();
+
+    $pendaftaran = Pendaftaran::where('user_id', $user->id)->first();
+
+    if (!$pendaftaran) {
+        return redirect()->route('pilih.ukm')
+            ->with('info', 'Anda belum terdaftar di UKM manapun.');
     }
 
-    /**
-     * Form edit anggota
-     */
-    public function edit(int $id)
+    $ukmSlug = $pendaftaran->ukm_tujuan;
+
+    $anggotas = Pendaftaran::where('ukm_tujuan', $ukmSlug)
+        ->where('status', 'diterima')
+        ->orderBy('nama_lengkap')
+        ->get();
+
+    $ukm = Ukm::where('slug', $ukmSlug)->first();
+
+    return view('pages.anggota.index', compact('anggotas', 'ukm'));
+}
+    public function profilUser($id)
     {
-        $anggota = User::findOrFail($id);
+        $user = Auth::user();
+        $userPendaftaran = Pendaftaran::where('user_id', $user->id)->first();
+        if (!$userPendaftaran) {
+            return redirect()->route('pilih.ukm')
+                ->with('info', 'Anda belum terdaftar di UKM manapun.');
+        }
 
-        $ukms = Ukm::all();
+        $ukmSlug = $userPendaftaran->ukm_tujuan;
+        $anggota = Pendaftaran::where('ukm_tujuan', $ukmSlug)
+            ->where('id', $id)
+            ->firstOrFail();
 
-        return view(
-            'admin.pages.anggota.edit',
-            compact('anggota', 'ukms')
-        );
+        // 📁 resources/views/pages/profil.blade.php
+        return view('pages.profil', compact('anggota'));
     }
 
-    /**
-     * Update data anggota
-     */
-    public function update(Request $request, int $id)
+    // ==========================================
+    // UNTUK ADMIN (SUPER ADMIN & ADMIN PENGURUS)
+    // ==========================================
+
+    public function index(Request $request, $ukm_id = null)
     {
-        $anggota = User::findOrFail($id);
+        $user = Auth::user();
+        $search = $request->get('search');
 
-        $request->validate([
-            'name' => 'required',
-            'email' => 'required|email',
-            'npm' => 'nullable',
-            'program_studi' => 'nullable',
-            'angkatan' => 'nullable',
-            'telepon' => 'nullable',
-        ]);
+        $query = User::with('ukm')->where('role', 'anggota');
 
-        $anggota->update([
-            'name' => $request->name,
-            'email' => $request->email,
-            'npm' => $request->npm,
-            'program_studi' => $request->program_studi,
-            'angkatan' => $request->angkatan,
-            'telepon' => $request->telepon,
-        ]);
+        if ($user->role !== 'super_admin') {
+            $ukm = $this->getCurrentUkmForAdmin();
+            $query->where('ukm_id', $ukm->id);
+            $ukm_id = $ukm->id;
+        }
+
+        if ($user->role === 'super_admin' && $ukm_id) {
+            $query->where('ukm_id', $ukm_id);
+        }
+
+        if ($search) {
+            $query->where(function ($q) use ($search) {
+                $q->where('name', 'like', "%{$search}%")
+                  ->orWhere('npm', 'like', "%{$search}%")
+                  ->orWhere('email', 'like', "%{$search}%");
+            });
+        }
+
+        $anggotas = $query->orderBy('name')->paginate(10);
+        $ukm = $ukm_id ? Ukm::find($ukm_id) : null;
+
+        // 📁 resources/views/pages/anggota/index.blade.php
+        return view('admin.pages.anggota.index', compact('ukm', 'anggotas'));
+    }
+
+    public function show($id)
+    {
+        $anggota = $this->getAnggotaOrFail($id);
+        // 📁 resources/views/pages/profil.blade.php
+        return view('admin.pages.anggota.profil', compact('anggota'));
+    }
+
+    public function edit($id)
+    {
+        $anggota = $this->getAnggotaOrFail($id);
+        $ukms = Ukm::where('status', 'aktif')->get();
+
+        // 📁 resources/views/pages/anggota/edit.blade.php
+        return view('admin.pages.anggota.edit', compact('anggota', 'ukms'));
+    }
+
+    public function update(Request $request, $id)
+    {
+        $anggota = $this->getAnggotaOrFail($id);
+        $user = Auth::user();
+
+        $rules = [
+            'name' => 'required|string|max:255',
+            'email' => [
+                'required',
+                'email',
+                'max:255',
+                Rule::unique('users', 'email')->ignore($anggota->id),
+            ],
+            'npm' => 'nullable|string|max:50',
+            'program_studi' => 'nullable|string|max:255',
+            'angkatan' => 'nullable|string|max:4',
+            'telepon' => 'nullable|string|max:20',
+        ];
+
+        if ($user->role === 'super_admin') {
+            $rules['ukm_id'] = 'nullable|exists:ukms,id';
+        }
+
+        $request->validate($rules);
+
+        $data = $request->only(['name', 'email', 'npm', 'program_studi', 'angkatan', 'telepon']);
+        if ($user->role === 'super_admin') {
+            $data['ukm_id'] = $request->ukm_id;
+        }
+
+        $anggota->update($data);
 
         return redirect()
-            ->back()
+            ->route('admin.ukm.anggota', ['ukm_id' => $anggota->ukm_id])
             ->with('success', 'Data anggota berhasil diperbarui.');
     }
 
-    /**
-     * Hapus anggota
-     */
-    public function destroy(int $id)
+    public function destroy($id)
     {
-        $anggota = User::findOrFail($id);
-
+        $anggota = $this->getAnggotaOrFail($id);
+        $ukmId = $anggota->ukm_id;
         $anggota->delete();
 
         return redirect()
-            ->back()
+            ->route('admin.ukm.anggota', ['ukm_id' => $ukmId])
             ->with('success', 'Data anggota berhasil dihapus.');
     }
 }

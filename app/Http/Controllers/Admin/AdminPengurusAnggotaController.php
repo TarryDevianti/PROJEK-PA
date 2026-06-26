@@ -9,129 +9,183 @@ use Illuminate\Support\Facades\Auth;
 
 class AdminPengurusAnggotaController extends Controller
 {
-    // TAMPIL DATA ANGGOTA
+    /**
+     * Menampilkan daftar anggota yang sudah diterima untuk UKM admin
+     */
     public function index()
     {
         $user = Auth::user();
-
         $ukm = $user->ukm;
 
         if (!$ukm) {
-            abort(403, 'UKM tidak ditemukan');
+            abort(403, 'UKM tidak ditemukan.');
         }
 
-        $anggota = Pendaftaran::where('ukm_tujuan', $ukm->nama_ukm)
+        // Gunakan SLUG sebagai acuan (pastikan di database ukm_tujuan = slug)
+        $slug = $ukm->slug;
+
+        // Debug: hitung total data dengan slug ini (untuk pengecekan)
+        $totalData = Pendaftaran::where('ukm_tujuan', $slug)->count();
+
+        // Ambil data anggota dengan status diterima
+        $anggota = Pendaftaran::where('ukm_tujuan', $slug)
             ->where('status', 'diterima')
             ->latest()
             ->get();
 
-        return view(
-            'admin_pengurus.anggota.index',
-            compact('anggota')
-        );
+        return view('admin_pengurus.anggota.index', compact('anggota', 'totalData', 'slug'));
     }
 
-    // DETAIL ANGGOTA
+    /**
+     * Detail anggota
+     */
     public function show($id)
     {
-        $anggota = Pendaftaran::findOrFail($id);
+        $user = Auth::user();
+        $ukm = $user->ukm;
 
-        return view(
-            'admin_pengurus.anggota.show',
-            compact('anggota')
-        );
+        if (!$ukm) {
+            abort(403, 'UKM tidak ditemukan.');
+        }
+
+        $anggota = Pendaftaran::where('ukm_tujuan', $ukm->slug)
+            ->findOrFail($id);
+
+        return view('admin_pengurus.anggota.show', compact('anggota'));
     }
 
-    // FORM TAMBAH
+    /**
+     * Form tambah anggota (manual oleh admin)
+     */
     public function create()
     {
         return view('admin_pengurus.anggota.create');
     }
 
-    // SIMPAN DATA
+    /**
+     * Simpan anggota baru
+     */
     public function store(Request $request)
     {
         $request->validate([
-            'nama_lengkap' => 'required',
-            'npm' => 'required',
-            'prodi' => 'required',
-            'email' => 'required',
-            'no_telepon' => 'required',
-            'angkatan' => 'required',
-            'divisi_tujuan' => 'required',
+            'nama_lengkap' => 'required|string|max:255',
+            'npm'          => 'required|string|max:50|unique:pendaftaran,npm',
+            'prodi'        => 'required|string|max:255',
+            'email'        => 'required|email|max:255',
+            'no_telepon'   => 'required|string|max:20',
+            'angkatan'     => 'required|string|max:4',
+            'divisi_tujuan'=> 'required|string|max:255',
         ]);
 
         $user = Auth::user();
+        $ukm = $user->ukm;
+
+        if (!$ukm) {
+            abort(403, 'UKM tidak ditemukan.');
+        }
 
         Pendaftaran::create([
-            'nama_lengkap' => $request->nama_lengkap,
-            'npm' => $request->npm,
-            'prodi' => $request->prodi,
-            'email' => $request->email,
-            'no_telepon' => $request->no_telepon,
-            'angkatan' => $request->angkatan,
-            'divisi_tujuan' => $request->divisi_tujuan,
-            'ukm_tujuan' => $user->ukm->nama_ukm,
-            'status' => 'diterima',
+            'nama_lengkap'   => $request->nama_lengkap,
+            'npm'            => $request->npm,
+            'prodi'          => $request->prodi,
+            'email'          => $request->email,
+            'no_telepon'     => $request->no_telepon,
+            'angkatan'       => $request->angkatan,
+            'divisi_tujuan'  => $request->divisi_tujuan,
+            'ukm_tujuan'     => $ukm->slug, // <-- PASTIKAN PAKAI SLUG
+            'status'         => 'diterima',
         ]);
 
         return redirect()
             ->route('admin-pengurus.anggota')
-            ->with('success', 'Anggota berhasil ditambahkan');
+            ->with('success', 'Anggota berhasil ditambahkan.');
     }
 
-    // FORM EDIT
+    /**
+     * Form edit anggota
+     */
     public function edit($id)
     {
-        $anggota = Pendaftaran::findOrFail($id);
+        $user = Auth::user();
+        $ukm = $user->ukm;
 
-        return view(
-            'admin_pengurus.anggota.edit',
-            compact('anggota')
-        );
+        if (!$ukm) {
+            abort(403, 'UKM tidak ditemukan.');
+        }
+
+        $anggota = Pendaftaran::where('ukm_tujuan', $ukm->slug)
+            ->findOrFail($id);
+
+        return view('admin_pengurus.anggota.edit', compact('anggota'));
     }
 
-    // UPDATE DATA
+    /**
+     * Update data anggota
+     */
     public function update(Request $request, $id)
-{
-    $request->validate([
-        'nama_lengkap' => 'required',
-        'npm' => 'required',
-        'prodi' => 'required',
-        'email' => 'required',
-        'no_telepon' => 'required',
-        'angkatan' => 'required',
-        'divisi_tujuan' => 'required',
-        'no_anggota' => 'nullable',
-        'jabatan' => 'nullable',
-    ]);
+    {
+        $request->validate([
+            'nama_lengkap' => 'required|string|max:255',
+            'npm'          => 'required|string|max:50|unique:pendaftaran,npm,' . $id,
+            'prodi'        => 'required|string|max:255',
+            'email'        => 'required|email|max:255',
+            'no_telepon'   => 'required|string|max:20',
+            'angkatan'     => 'required|string|max:4',
+            'divisi_tujuan'=> 'required|string|max:255',
+            'no_anggota'   => 'nullable|string|max:50',
+            'jabatan'      => 'nullable|string|max:255',
+        ]);
 
-    $anggota = Pendaftaran::findOrFail($id);
+        $user = Auth::user();
+        $ukm = $user->ukm;
 
-    $anggota->update([
-        'nama_lengkap' => $request->nama_lengkap,
-        'npm' => $request->npm,
-        'prodi' => $request->prodi,
-        'email' => $request->email,
-        'no_telepon' => $request->no_telepon,
-        'angkatan' => $request->angkatan,
-        'divisi_tujuan' => $request->divisi_tujuan,
-        'no_anggota' => $request->no_anggota,
-        'jabatan' => $request->jabatan,
-    ]);
+        if (!$ukm) {
+            abort(403, 'UKM tidak ditemukan.');
+        }
 
-    return redirect()
-        ->route('admin-pengurus.anggota')
-        ->with('success', 'Data anggota berhasil diupdate');
-}
+        $anggota = Pendaftaran::where('ukm_tujuan', $ukm->slug)
+            ->findOrFail($id);
 
-    // HAPUS DATA
+        $anggota->update([
+            'nama_lengkap'   => $request->nama_lengkap,
+            'npm'            => $request->npm,
+            'prodi'          => $request->prodi,
+            'email'          => $request->email,
+            'no_telepon'     => $request->no_telepon,
+            'angkatan'       => $request->angkatan,
+            'divisi_tujuan'  => $request->divisi_tujuan,
+            'no_anggota'     => $request->no_anggota,
+            'jabatan'        => $request->jabatan,
+        ]);
+
+        return redirect()
+            ->route('admin-pengurus.anggota')
+            ->with('success', 'Data anggota berhasil diperbarui.');
+    }
+
+    /**
+     * Hapus anggota
+     */
     public function destroy($id)
     {
-        $anggota = Pendaftaran::findOrFail($id);
+        $user = Auth::user();
+        $ukm = $user->ukm;
+
+        if (!$ukm) {
+            abort(403, 'UKM tidak ditemukan.');
+        }
+
+        $anggota = Pendaftaran::where('ukm_tujuan', $ukm->slug)
+            ->findOrFail($id);
+
+        if ($anggota->foto && \Storage::disk('public')->exists($anggota->foto)) {
+            \Storage::disk('public')->delete($anggota->foto);
+        }
 
         $anggota->delete();
 
-        return back()->with('success', 'Data anggota berhasil dihapus');
+        return redirect()
+            ->route('admin-pengurus.anggota')
+            ->with('success', 'Data anggota berhasil dihapus.');
     }
 }
